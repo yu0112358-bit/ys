@@ -4,6 +4,7 @@ import { db } from "./firebase";
 import { useFavorites } from "./useFavorites";
 import { useLocation } from "./useLocation";
 import { calcDistance } from "./utils/distance";
+import { estimateCrowd } from "./utils/crowd";
 
 type Cafe = {
   id: string;
@@ -12,6 +13,11 @@ type Cafe = {
   lat: number;
   lng: number;
   distance?: number;
+  crowd?: {
+    level: "low" | "mid" | "high";
+    label: string;
+    color: string;
+  };
 };
 
 export default function App() {
@@ -20,40 +26,53 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   const fav = useFavorites();
-  const { location } = useLocation(); // ← ★これが必要
+  const { location, requestLocation } = useLocation();
 
   useEffect(() => {
     const fetchCafes = async () => {
       try {
-        const snap = await getDocs(collection(db, "cafes")); // ← ★必要
+        const snap = await getDocs(collection(db, "cafes"));
 
         const list: Cafe[] = snap.docs.map((d) => {
           const data = d.data() as Omit<Cafe, "id">;
 
+          const distance = location
+            ? calcDistance(
+                location.lat,
+                location.lng,
+                data.lat,
+                data.lng
+              )
+            : undefined;
+
+          const crowd = estimateCrowd();
+
           return {
             id: d.id,
             ...data,
-            distance: location
-              ? calcDistance(
-                  location.lat,
-                  location.lng,
-                  data.lat,
-                  data.lng
-                )
-              : undefined,
+            distance,
+            crowd,
           };
         });
 
-        setCafes(list); // ← ★必要
+        // 距離がある場合は近い順に並び替え
+        list.sort((a, b) => {
+          if (a.distance !== undefined && b.distance !== undefined) {
+            return a.distance - b.distance;
+          }
+          return 0;
+        });
+
+        setCafes(list);
       } catch (e) {
         console.error(e);
       } finally {
-        setLoading(false); // ← ★必要
+        setLoading(false);
       }
     };
 
     fetchCafes();
-  }, [location]); // ← ★ location が取れたら再計算
+  }, [location]);
 
   if (loading) return <div style={{ padding: 16 }}>Loading...</div>;
 
@@ -61,11 +80,42 @@ export default function App() {
     <div style={{ padding: 16, maxWidth: 600, margin: "0 auto" }}>
       <h1>Cafe Now</h1>
 
+      {/* 位置情報取得 */}
+      {!location && (
+        <button
+          onClick={requestLocation}
+          style={{
+            marginBottom: 12,
+            padding: "8px 12px",
+            borderRadius: 8,
+            border: "1px solid #ccc",
+            cursor: "pointer",
+          }}
+        >
+          📍 現在地を取得する
+        </button>
+      )}
+
+      {/* ===== 詳細画面 ===== */}
       {selectedCafe ? (
         <div>
           <button onClick={() => setSelectedCafe(null)}>← 戻る</button>
+
           <h2>{selectedCafe.name}</h2>
           <p>エリア：{selectedCafe.area}</p>
+
+          {selectedCafe.crowd && (
+            <p style={{ color: selectedCafe.crowd.color }}>
+              混雑度：{selectedCafe.crowd.label}
+            </p>
+          )}
+
+          {selectedCafe.distance && (
+            <p>
+              🚶‍♂️ {selectedCafe.distance}m（徒歩約
+              {Math.ceil(selectedCafe.distance / 80)}分）
+            </p>
+          )}
 
           {/* 地図 */}
           <div style={{ marginTop: 12 }}>
@@ -79,12 +129,15 @@ export default function App() {
             />
           </div>
 
-          {/* お気に入り */}
-          <button onClick={() => fav.toggle(selectedCafe.id)}>
+          <button
+            style={{ marginTop: 12 }}
+            onClick={() => fav.toggle(selectedCafe.id)}
+          >
             {fav.isFav(selectedCafe.id) ? "❤️ お気に入り" : "🤍 お気に入り"}
           </button>
         </div>
       ) : (
+        /* ===== 一覧 ===== */
         <div style={{ display: "grid", gap: 12 }}>
           {cafes.map((cafe) => (
             <div
@@ -103,6 +156,19 @@ export default function App() {
               <div>
                 <strong>{cafe.name}</strong>
                 <div style={{ color: "#666" }}>{cafe.area}</div>
+
+                {cafe.crowd && (
+                  <div
+                    style={{
+                      marginTop: 4,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: cafe.crowd.color,
+                    }}
+                  >
+                    {cafe.crowd.label}
+                  </div>
+                )}
 
                 {cafe.distance && (
                   <div style={{ marginTop: 4 }}>
